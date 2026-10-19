@@ -1,5 +1,9 @@
 # MedSTP
 
+**Accepted at WACV.**
+
+[MedSTP: Preserving Subspace and Transition Evidence for Medical VQA Token Pruning](https://arxiv.org/abs/2610.22751)
+
 **MedSTP** is a training-free visual-token pruning method for medical vision-language models. It selects a compact subset of the original visual embeddings before they reach the language model, using two complementary signals:
 
 - **Subspace selection:** PCA coordinates and iterative residual-gain selection retain complementary directions in the visual representation.
@@ -77,4 +81,20 @@ tests/
 
 ```bash
 python -m unittest discover -s tests -v
+```
+
+## Citation
+
+If you use MedSTP in your research, please cite our paper:
+
+```bibtex
+@misc{fan2026medstp,
+  title         = {{MedSTP}: Preserving Subspace and Transition Evidence for Medical VQA Token Pruning},
+  author        = {Mengchen Fan and Qizhen Lan and Xi Xiao and Lin Zhao and Liang He and Tianyang Wang and Xiaoqian Jiang and Pulin Che and Baocheng Geng},
+  year          = {2026},
+  eprint        = {2610.22751},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2610.22751}
+}
 ```
