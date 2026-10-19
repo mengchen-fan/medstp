@@ -1,106 +1,80 @@
 # MedSTP
 
-A minimal, training-free visual-token selector for frozen medical VQA models.
-The implementation keeps the verified MedSTP-v1 selection rule: token-side PCA,
-component grouping, Sobel-weighted residual-QR ordering, count-based group budgets,
-and exact-K completion. It does **not** use similarity NMS.
+**MedSTP** is a training-free visual-token pruning method for medical vision-language models. It selects a compact subset of the original visual embeddings before they reach the language model, using two complementary signals:
 
-This repository contains only the method, a synthetic smoke test, and unit tests.
-No datasets, images, model weights, predictions, experiment results, cluster
-paths, or evaluation pipelines are included.
+- **Subspace selection:** PCA coordinates and iterative residual-gain selection retain complementary directions in the visual representation.
+- **Transition evidence:** Sobel-based gradients over the spatial token grid highlight tokens at structural transitions.
 
-## Install
+MedSTP needs no fine-tuning and no additional trained network. The selected tokens are the original embeddings, gathered unchanged and kept in their original order.
 
-Requires Python 3.10+ and PyTorch 2.2+. Install the appropriate PyTorch build for
-your CPU/CUDA environment, then install this package:
+> This repository provides the standalone selector. It is not a turnkey inference or evaluation framework, and it does not include datasets, model weights, or experimental results.
+
+## Requirements
+
+- Python 3.10+
+- PyTorch 2.2+
+
+## Installation
 
 ```bash
+git clone https://github.com/mengchen-fan/medstp.git
+cd medstp
 pip install -e .
-python -m medstp
-python -m unittest discover -s tests -v
 ```
 
-The smoke test uses generated token embeddings; it downloads nothing and writes
-no files. To run it on a GPU:
+## Quick Start
+
+Run the synthetic smoke test. It downloads no data or models and writes no files.
 
 ```bash
-python -m medstp --device cuda
+python -m medstp                 # automatically selects CPU or CUDA
+python -m medstp --device cuda   # explicitly use a GPU
 ```
 
-## Use
+## Usage
 
 ```python
-import torch
 from medstp import select_medstp
 
-# Replace these synthetic tensors with one image's post-merger visual embeddings
-# and its processor-provided image_grid_thw.
-tokens = torch.randn(576, 128)              # [N, D]
-image_grid_thw = torch.tensor([[1, 48, 48]])
-
 selection = select_medstp(
-    tokens,
+    visual_tokens,
     image_grid_thw=image_grid_thw,
-    spatial_merge_size=2,
+    spatial_merge_size=spatial_merge_size,
 )
-selected_indices = selection.indices
-selected_tokens = selection.pruned_tokens
+
+kept_indices = selection.indices        # unique indices, in original order
+kept_tokens = selection.pruned_tokens   # unchanged embeddings at those indices
 ```
 
-The grid above is a synthetic example, not an inferred grid. The merged grid is
-24 x 24, matching the 576 visual embeddings. Pass the real processor metadata
-and the model's `vision_config.spatial_merge_size` in an actual VLM integration.
-If the actual post-merger grid is already known, pass `grid_hw=(height, width)`
-instead. Missing or inconsistent grids raise an error; the package does not
-silently reshape tokens into a guessed square.
+The inputs are:
 
-`select_medstp` accepts a single image's `[N, D]` floating-point tensor, on CPU
-or CUDA. Returned indices are unique, sorted in original sequence order, and on
-the input device. Returned embeddings are gathered unchanged from the input,
-preserving its dtype. The retained count is `K = floor(keep_ratio * N)`.
+- **`visual_tokens`** is a floating-point tensor of shape `[N, D]` for a single image. It holds the visual embeddings *after* the vision-language merger, as they would be passed to the language model.
+- **`image_grid_thw`** is the image's grid metadata as returned by the model's processor. Pass the real values; MedSTP does not guess a square grid.
+- **`spatial_merge_size`** is the merge factor from the backbone's `vision_config`.
 
-### One fixed default configuration
+If you already know the merged spatial grid, you can pass it directly as `grid_hw` instead of `image_grid_thw`.
 
-| Setting | Default |
-|---|---|
-| Keep ratio | 0.10 |
-| Sobel multiplier beta | 0.10 |
-| PCA components | `max(floor(K / 4), 4)` |
-| PCA random seed | 0, inside a local RNG context |
-| PCA preprocessing | `sigmoid(tokens.float()).T`, `center=True` |
-| PCA coordinates | signed loadings multiplied by singular values |
-| Group assignment | maximum absolute PCA loading |
-| Within-group ordering | Sobel-weighted residual-QR, then loading fallback |
-| Group allocation | original count-based lower/upper-cap allocation |
-| Sobel padding | replicate |
+Inputs may be on CPU or CUDA.
 
-The public API allows changing the token budget and `beta`, but there are no
-dataset-specific presets, v1/v2 switches, search scripts, or hidden environment
-variable overrides. This is one fixed release configuration, **not a claim that
-one configuration reproduces every historical paper-table row**.
+## Integration Notes
 
-As in the source implementation, PCA requires `max(floor(K / 4), 4)` not to
-exceed `min(N, D)` when `N > 16`. The rank is not silently clamped. Repeated
-calls are deterministic within the same backend; different PyTorch versions,
-devices, and numerical tie behavior can change selected indices.
+- **Visual tokens only.** Pass only the image's visual embeddings. Exclude text tokens and special delimiters such as vision start/end markers.
+- **Keep alignment.** Apply the same `selection.indices` to the visual position IDs and to any other token-aligned features or masks. This keeps the retained tokens at their original positions.
+- **One image at a time.** For inputs with multiple images, run the selector separately on each image's tokens and its own grid metadata.
 
-### VLM integration boundary
+## Repository Structure
 
-Apply the selector after the vision-language merger and before LLM insertion.
-Pass only image patch embeddings: exclude image delimiters, text, and other
-special tokens. Gather the corresponding original visual-position IDs with
-`selected_indices`; do not assign a new spatial grid to the retained sequence.
-Backbone-specific aligned features (for example Qwen3-VL DeepStack embeddings)
-must be gathered with the same indices, and the sequence mask must be shortened
-consistently. For multiple images, call the selector separately for each image.
+```text
+medstp/
+├── selector.py     # public API and grid validation
+├── subspace.py     # PCA-based subspace selection
+└── transition.py   # Sobel-based transition evidence
+tests/
+└── test_medstp.py
+```
 
-The package returns a token subset; it does not patch a Transformers model or
-implement decoding, dataset loading, answer scoring, or benchmarking.
+## Tests
 
-## Source and attribution
-
-The extraction preserves the verified Delta MedSTP-v1 branch, rather than the
-older NMS-based `MedSTP-clean` prototype. PCA grouping and count-based budget
-allocation follow the [PruneSID](https://github.com/ZhengyaoFang/PruneSID) lineage;
-the within-group selection is residual-QR with the existing Sobel multiplier.
-See [SOURCE.md](SOURCE.md) for the exact extraction boundary and source hash.
+```bash
+python -m unittest discover -s tests -v
+```
